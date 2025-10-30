@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barokah POS - Sistem Kasir Interaktif</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f9;
+        }
+        .elegant-card {
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .elegant-card:hover {
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.12);
+        }
+        .pos-btn {
+            transition: all 0.3s ease;
+        }
+        .pos-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(79, 70, 229, 0.4);
+        }
+        .barcode-reader {
+            max-width: 100%;
+            height: 300px;
+            overflow: hidden;
+            border-radius: 0.75rem;
+            background: #1f2937;
+        }
+    </style>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // QuaggaJS for Barcode Scanning (Loaded globally below)
+        
+        window.firebase = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, runTransaction,
+            setLogLevel
+        };
+    </script>
+    <!-- QuaggaJS for Barcode Scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <div id="app" class="flex-grow flex flex-col">
+        <!-- Loading and Auth Status -->
+        <div id="loading-screen" class="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50 transition-opacity duration-500">
+            <div class="text-white text-4xl font-extrabold mb-4 animate-pulse">Barokah POS</div>
+            <div class="text-indigo-400 text-xl">Memuat Sistem Kasir...</div>
+            <p id="auth-status" class="mt-4 text-sm text-gray-400"></p>
+            <p id="user-id-display" class="mt-2 text-xs text-gray-500 hidden"></p>
+        </div>
+
+        <!-- Main Content (Hidden until authenticated) -->
+        <header id="header" class="bg-white shadow-lg p-4 flex justify-between items-center z-10 hidden">
+            <h1 class="text-3xl font-extrabold text-indigo-700">Barokah POS</h1>
+            <nav class="flex space-x-4">
+                <button onclick="app.showPage('transaction')" class="nav-link text-lg font-medium text-gray-600 hover:text-indigo-600 transition duration-150 p-2 rounded-lg" data-page="transaction">Transaksi</button>
+                <button onclick="app.showPage('products')" class="nav-link text-lg font-medium text-gray-600 hover:text-indigo-600 transition duration-150 p-2 rounded-lg" data-page="products">Manajemen Barang</button>
+                <div class="flex items-center space-x-2 bg-indigo-100 p-2 rounded-full">
+                    <span class="text-sm text-indigo-800 font-semibold">Manajer:</span>
+                    <span id="header-user-id" class="text-xs text-indigo-600 truncate max-w-[100px]">ID Pengguna</span>
+                </div>
+            </nav>
+        </header>
+
+        <main class="flex-grow p-4 md:p-8">
+            <!-- Transaction Page -->
+            <div id="page-transaction" class="page-content grid grid-cols-1 lg:grid-cols-3 gap-8 hidden">
+                <!-- Shopping Cart -->
+                <div class="lg:col-span-2 bg-white elegant-card rounded-xl p-6 h-full">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-gray-800">Keranjang Belanja</h2>
+                        <button onclick="app.openScanner('transaction')" class="pos-btn bg-green-600 text-white px-4 py-2 rounded-full flex items-center shadow-lg hover:bg-green-700">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.218A2 2 0 0110.45 4h3.1a2 2 0 011.664.89l.812 1.218A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                            Pindai Barcode (Kamera)
+                        </button>
+                    </div>
+
+                    <div id="cart-items" class="space-y-4 max-h-[50vh] overflow-y-auto">
+                        <!-- Cart items will be rendered here -->
+                        <p class="text-gray-500 text-center py-10">Keranjang kosong. Mulai pindai barcode atau tambahkan barang.</p>
+                    </div>
+                </div>
+
+                <!-- Summary & Payment -->
+                <div class="lg:col-span-1 bg-white elegant-card rounded-xl p-6 sticky top-8">
+                    <h2 class="text-2xl font-bold text-indigo-700 mb-6">Ringkasan & Pembayaran</h2>
+                    <div class="space-y-4">
+                        <div class="flex justify-between text-lg font-medium text-gray-600">
+                            <span>Subtotal:</span>
+                            <span id="cart-subtotal">Rp 0</span>
+                        </div>
+                        <div class="flex justify-between text-xl font-bold text-indigo-700 border-t pt-4 border-indigo-200">
+                            <span>TOTAL AKHIR:</span>
+                            <span id="cart-total">Rp 0</span>
+                        </div>
+                    </div>
+
+                    <div class="mt-6">
+                        <label for="cash-input" class="block text-sm font-medium text-gray-700 mb-2">Uang Tunai Diterima (Rp)</label>
+                        <input type="number" id="cash-input" oninput="app.calculateChange()" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-2xl font-bold" value="0">
+                    </div>
+
+                    <div class="mt-4 flex justify-between text-xl font-bold text-red-600">
+                        <span>KEMBALIAN:</span>
+                        <span id="cart-change">Rp 0</span>
+                    </div>
+
+                    <button onclick="app.completeTransaction()" id="complete-transaction-btn" class="pos-btn w-full mt-8 bg-indigo-600 text-white text-xl font-semibold py-3 rounded-xl shadow-lg hover:bg-indigo-700 disabled:opacity-50" disabled>
+                        Selesaikan Transaksi
+                    </button>
+                    <button onclick="app.clearCart()" class="pos-btn w-full mt-3 bg-red-100 text-red-600 text-md py-2 rounded-xl hover:bg-red-200">
+                        Batalkan Transaksi
+                    </button>
+                </div>
+            </div>
+
+            <!-- Products Page -->
+            <div id="page-products" class="page-content hidden">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-3xl font-bold text-gray-800">Manajemen Produk</h2>
+                    <button onclick="app.openScanner('product_input')" class="pos-btn bg-indigo-600 text-white px-6 py-3 rounded-full flex items-center shadow-lg hover:bg-indigo-700">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        Tambah Barang Baru (Scan Barcode)
+                    </button>
+                </div>
+
+                <div class="bg-white elegant-card rounded-xl p-6">
+                    <div id="product-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        <!-- Product cards will be rendered here -->
+                        <p id="product-list-empty" class="text-gray-500 col-span-full text-center py-10">Tidak ada produk terdaftar. Silakan tambahkan barang.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals (Hidden by default) -->
+
+    <!-- Scanner Modal -->
+    <div id="scanner-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden transition-opacity duration-300">
+        <div class="bg-white rounded-xl p-6 w-11/12 max-w-lg elegant-card">
+            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Pemindai Barcode Kamera</h3>
+            <p class="text-gray-600 mb-4">Arahkan kamera ke barcode barang. Pastikan pencahayaan cukup.</p>
+            <div id="interactive" class="viewport barcode-reader relative">
+                <video class="w-full h-full object-cover"></video>
+                <canvas class="drawingBuffer absolute top-0 left-0 w-full h-full"></canvas>
+            </div>
+            <div id="scanner-result" class="mt-4 p-3 bg-indigo-100 text-indigo-800 rounded-lg font-mono break-all">Menunggu hasil pindai...</div>
+            <div class="flex justify-end mt-4 space-x-3">
+                <button onclick="app.closeScanner()" class="pos-btn bg-gray-300 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-400">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Product Input Modal (After Scan in Product Management) -->
+    <div id="product-input-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden transition-opacity duration-300">
+        <div class="bg-white rounded-xl p-6 w-11/12 max-w-md elegant-card">
+            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Data Produk Baru</h3>
+            <form id="product-input-form">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700">Barcode</label>
+                    <input type="text" id="input-barcode" class="w-full p-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed" readonly required>
+                </div>
+                <div class="mb-4">
+                    <label for="input-name" class="block text-sm font-medium text-gray-700">Nama Barang</label>
+                    <input type="text" id="input-name" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500" required>
+                </div>
+                <div class="mb-4">
+                    <label for="input-price" class="block text-sm font-medium text-gray-700">Harga Jual (Rp)</label>
+                    <input type="number" id="input-price" min="0" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500" required>
+                </div>
+                <div class="mb-4">
+                    <label for="input-stock" class="block text-sm font-medium text-gray-700">Stok Awal</label>
+                    <input type="number" id="input-stock" min="0" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500" required>
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="app.closeModal('product-input-modal')" class="pos-btn bg-gray-300 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-400">Batal</button>
+                    <button type="submit" class="pos-btn bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">Simpan Produk</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Receipt Modal -->
+    <div id="receipt-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden transition-opacity duration-300">
+        <div class="bg-white rounded-xl p-6 w-11/12 max-w-sm elegant-card">
+            <h3 class="text-3xl font-bold text-center text-indigo-700 mb-6">STRUK PEMBELIAN</h3>
+            <div id="receipt-content" class="text-sm space-y-1">
+                <!-- Receipt details will be rendered here -->
+            </div>
+            <div class="text-center mt-6">
+                <p class="text-xs text-gray-500">Terima kasih telah berbelanja di Barokah POS.</p>
+                <button onclick="app.closeModal('receipt-modal')" class="pos-btn mt-4 bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700">Selesai</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message/Error Modal -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden transition-opacity duration-300">
+        <div class="bg-white rounded-xl p-6 w-11/12 max-w-sm elegant-card">
+            <h3 id="message-title" class="text-2xl font-bold mb-4 text-center"></h3>
+            <p id="message-body" class="text-gray-600 text-center"></p>
+            <div class="flex justify-center mt-4 space-x-3">
+                <button onclick="app.closeModal('message-modal')" class="pos-btn bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">OK</button>
+            </div>
+        </div>
+    </div>
+
+<script type="module">
+    // Global Constants from Canvas Environment
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    // Use a dedicated class for all application logic
+    class BarokahPOS {
+        constructor() {
+            this.db = null;
+            this.auth = null;
+            this.userId = null;
+            this.isAuthReady = false;
+            this.products = []; // Main list of products
+            this.cart = [];     // Current transaction cart
+            this.scannerMode = null; // 'transaction' or 'product_input'
+            this.scannerActive = false;
+            this.isTransactionProcessing = false;
+
+            this.initFirebase();
+            this.setupListeners();
+        }
+
+        /** Utility Functions **/
+        formatRupiah(number) {
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                minimumFractionDigits: 0
+            }).format(number);
+        }
+
+        showModal(id, title = null, body = null) {
+            const modal = document.getElementById(id);
+            if (modal) {
+                if (id === 'message-modal') {
+                    if (title) document.getElementById('message-title').textContent = title;
+                    if (body) document.getElementById('message-body').textContent = body;
+                }
+                modal.classList.remove('hidden');
+            }
+        }
+
+        closeModal(id) {
+            const modal = document.getElementById(id);
+            if (modal) modal.classList.add('hidden');
+        }
+
+        showMessage(title, body) {
+            this.showModal('message-modal', title, body);
+            document.getElementById('message-title').classList.toggle('text-red-600', title.toLowerCase().includes('gagal'));
+            document.getElementById('message-title').classList.toggle('text-indigo-600', !title.toLowerCase().includes('gagal'));
+        }
+
+        showPage(pageId) {
+            document.querySelectorAll('.page-content').forEach(p => p.classList.add('hidden'));
+            document.getElementById(`page-${pageId}`).classList.remove('hidden');
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('bg-indigo-100', 'text-indigo-700');
+                link.classList.add('text-gray-600');
+                if (link.getAttribute('data-page') === pageId) {
+                    link.classList.add('bg-indigo-100', 'text-indigo-700');
+                    link.classList.remove('text-gray-600');
+                }
+            });
+        }
+
+        /** Firebase Initialization & Authentication **/
+        async initFirebase() {
+            try {
+                window.firebase.setLogLevel('debug');
+                const app = window.firebase.initializeApp(firebaseConfig);
+                this.db = window.firebase.getFirestore(app);
+                this.auth = window.firebase.getAuth(app);
+
+                document.getElementById('auth-status').textContent = 'Menghubungkan ke server...';
+
+                // Handle Authentication
+                window.firebase.onAuthStateChanged(this.auth, async (user) => {
+                    if (user) {
+                        this.userId = user.uid;
+                        document.getElementById('auth-status').textContent = 'Otentikasi berhasil.';
+                        document.getElementById('header-user-id').textContent = this.userId;
+                        document.getElementById('user-id-display').textContent = `User ID: ${this.userId}`;
+                        document.getElementById('user-id-display').classList.remove('hidden');
+
+                        // Initialization complete
+                        this.isAuthReady = true;
+                        document.getElementById('loading-screen').classList.add('opacity-0');
+                        setTimeout(() => {
+                            document.getElementById('loading-screen').classList.add('hidden');
+                            document.getElementById('header').classList.remove('hidden');
+                            this.showPage('transaction');
+                        }, 500);
+
+                        this.setupFirestoreListeners();
+
+                    } else {
+                        // Sign in anonymously if no token is provided
+                        if (initialAuthToken) {
+                            await window.firebase.signInWithCustomToken(this.auth, initialAuthToken);
+                        } else {
+                            await window.firebase.signInAnonymously(this.auth);
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase Init Error:", error);
+                document.getElementById('auth-status').textContent = `Gagal Otentikasi: ${error.message}`;
+            }
+        }
+
+        /** Firestore Data Handling **/
+        setupFirestoreListeners() {
+            if (!this.db || !this.isAuthReady) return;
+
+            // Products Collection (Public/Shared)
+            const productsRef = window.firebase.collection(this.db, 'artifacts', appId, 'public', 'data', 'products');
+
+            window.firebase.onSnapshot(productsRef, (snapshot) => {
+                this.products = [];
+                snapshot.forEach(doc => {
+                    this.products.push({ id: doc.id, ...doc.data() });
+                });
+                console.log("Products loaded:", this.products);
+                this.renderProductList();
+            }, (error) => {
+                console.error("Error fetching products:", error);
+                this.showMessage("Kesalahan Data", "Gagal memuat daftar produk.");
+            });
+        }
+
+        renderProductList() {
+            const listContainer = document.getElementById('product-list');
+            const emptyMessageEl = document.getElementById('product-list-empty');
+
+            // --- START FIX for TypeError: Cannot read properties of null (reading 'classList') ---
+            // Check if DOM elements exist before attempting to manipulate them
+            if (!listContainer || !emptyMessageEl) {
+                console.error("DOM elements for product list not found. Skipping render.");
+                return;
+            }
+            // --- END FIX ---
+
+            listContainer.innerHTML = '';
+            emptyMessageEl.classList.add('hidden');
+
+            if (this.products.length === 0) {
+                emptyMessageEl.classList.remove('hidden');
+                return;
+            }
+
+            this.products.forEach(p => {
+                const card = `
+                    <div class="bg-indigo-50 p-4 rounded-xl elegant-card border-l-4 border-indigo-500">
+                        <p class="text-xs text-gray-500 font-mono break-all mb-1">SKU: ${p.barcode}</p>
+                        <h4 class="text-lg font-bold text-indigo-800 truncate">${p.name}</h4>
+                        <p class="text-xl font-extrabold text-green-600 mt-2">${this.formatRupiah(p.price)}</p>
+                        <p class="text-sm text-gray-700">Stok: <span class="font-semibold">${p.stock}</span></p>
+                        <button onclick="app.editProduct('${p.id}')" class="text-sm text-indigo-600 hover:underline mt-2">Edit</button>
+                    </div>
+                `;
+                listContainer.insertAdjacentHTML('beforeend', card);
+            });
+        }
+
+        async saveProduct(barcode, name, price, stock) {
+            const productsRef = window.firebase.collection(this.db, 'artifacts', appId, 'public', 'data', 'products');
+            const existingProduct = this.products.find(p => p.barcode === barcode);
+
+            const productData = {
+                barcode: String(barcode),
+                name: String(name),
+                price: parseFloat(price),
+                stock: parseInt(stock, 10),
+                updatedAt: new Date().toISOString()
+            };
+
+            try {
+                if (existingProduct) {
+                    // Update existing product
+                    const docRef = window.firebase.doc(this.db, 'artifacts', appId, 'public', 'data', 'products', existingProduct.id);
+                    await window.firebase.updateDoc(docRef, productData);
+                    this.showMessage("Produk Diperbarui", `Data barang ${name} berhasil diperbarui.`);
+                } else {
+                    // Add new product
+                    await window.firebase.addDoc(productsRef, productData);
+                    this.showMessage("Produk Ditambahkan", `Barang ${name} berhasil ditambahkan ke database.`);
+                }
+                this.closeModal('product-input-modal');
+            } catch (error) {
+                console.error("Error saving product:", error);
+                this.showMessage("Gagal Menyimpan", `Terjadi kesalahan saat menyimpan produk: ${error.message}`);
+            }
+        }
+
+        editProduct(id) {
+            const product = this.products.find(p => p.id === id);
+            if (!product) return;
+
+            this.showModal('product-input-modal');
+            document.getElementById('input-barcode').value = product.barcode;
+            document.getElementById('input-name').value = product.name;
+            document.getElementById('input-price').value = product.price;
+            document.getElementById('input-stock').value = product.stock;
+
+            // Change form submission behavior to update
+            document.getElementById('product-input-form').onsubmit = (e) => {
+                e.preventDefault();
+                // FIX: Read current values from the input fields
+                const name = document.getElementById('input-name').value;
+                const price = document.getElementById('input-price').value;
+                const stock = document.getElementById('input-stock').value;
+
+                this.saveProduct(product.barcode, name, parseFloat(price), parseInt(stock, 10));
+            };
+        }
+
+        /** Barcode Scanning Logic (QuaggaJS) **/
+
+        initScanner(onDetectedCallback) {
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: document.querySelector('#interactive video'),
+                    constraints: {
+                        width: 640,
+                        height: 480,
+                        facingMode: "environment" // Use rear camera
+                    }
+                },
+                decoder: {
+                    readers: ["ean_reader", "code_128_reader", "upc_reader"]
+                }
+            }, (err) => {
+                if (err) {
+                    console.error(err);
+                    document.getElementById('scanner-result').textContent = 'Gagal mengakses kamera. Pastikan izin telah diberikan.';
+                    return;
+                }
+                document.getElementById('scanner-result').textContent = 'Pemindai siap. Arahkan ke barcode.';
+                Quagga.start();
+                this.scannerActive = true;
+            });
+
+            Quagga.onDetected((result) => {
+                if (!this.scannerActive) return;
+
+                const code = result.codeResult.code;
+                document.getElementById('scanner-result').textContent = `Barcode Terdeteksi: ${code}`;
+                Quagga.stop();
+                this.scannerActive = false;
+                this.closeModal('scanner-modal');
+                onDetectedCallback(code);
+            });
+        }
+
+        openScanner(mode) {
+            this.scannerMode = mode;
+            this.showModal('scanner-modal');
+
+            this.initScanner((barcode) => {
+                if (this.scannerMode === 'transaction') {
+                    this.addItemToCart(barcode);
+                } else if (this.scannerMode === 'product_input') {
+                    this.openProductInput(barcode);
+                }
+            });
+        }
+
+        closeScanner() {
+            this.closeModal('scanner-modal');
+            if (this.scannerActive) {
+                Quagga.stop();
+                this.scannerActive = false;
+            }
+        }
+
+        /** Product Input Handlers (Manajemen Barang) **/
+        openProductInput(barcode) {
+            const existingProduct = this.products.find(p => p.barcode === barcode);
+            this.showModal('product-input-modal');
+            document.getElementById('input-barcode').value = barcode;
+
+            if (existingProduct) {
+                document.getElementById('input-name').value = existingProduct.name;
+                document.getElementById('input-price').value = existingProduct.price;
+                document.getElementById('input-stock').value = existingProduct.stock;
+                document.getElementById('product-input-modal').querySelector('h3').textContent = 'Edit Data Produk';
+            } else {
+                document.getElementById('input-name').value = '';
+                document.getElementById('input-price').value = 0;
+                document.getElementById('input-stock').value = 1;
+                document.getElementById('product-input-modal').querySelector('h3').textContent = 'Data Produk Baru';
+            }
+
+            document.getElementById('product-input-form').onsubmit = (e) => {
+                e.preventDefault();
+                const name = document.getElementById('input-name').value;
+                const price = document.getElementById('input-price').value;
+                const stock = document.getElementById('input-stock').value;
+                this.saveProduct(barcode, name, price, stock);
+            };
+        }
+
+
+        /** Transaction Logic **/
+        addItemToCart(barcode) {
+            const product = this.products.find(p => p.barcode === barcode);
+
+            if (!product) {
+                this.showMessage("Barang Tidak Ditemukan", `Barcode ${barcode} tidak terdaftar. Silakan daftarkan di Manajemen Barang.`);
+                return;
+            }
+
+            if (product.stock <= 0) {
+                this.showMessage("Stok Habis", `Stok untuk ${product.name} habis.`);
+                return;
+            }
+
+            const cartItem = this.cart.find(item => item.barcode === barcode);
+
+            if (cartItem) {
+                if (cartItem.qty + 1 > product.stock) {
+                    this.showMessage("Stok Maksimal", `Jumlah ${product.name} di keranjang mencapai batas stok.`);
+                    return;
+                }
+                cartItem.qty += 1;
+            } else {
+                this.cart.push({ ...product, qty: 1 });
+            }
+
+            this.renderCart();
+        }
+
+        updateCartItemQty(barcode, newQty) {
+            const cartItem = this.cart.find(item => item.barcode === barcode);
+            const product = this.products.find(p => p.barcode === barcode);
+            const qty = parseInt(newQty, 10);
+
+            if (cartItem && product) {
+                if (qty <= 0) {
+                    this.cart = this.cart.filter(item => item.barcode !== barcode);
+                } else if (qty > product.stock) {
+                    this.showMessage("Stok Maksimal", `Jumlah melebihi stok yang tersedia (${product.stock}).`);
+                    cartItem.qty = product.stock;
+                } else {
+                    cartItem.qty = qty;
+                }
+            }
+
+            this.renderCart();
+        }
+
+        renderCart() {
+            const cartContainer = document.getElementById('cart-items');
+            cartContainer.innerHTML = '';
+            let subtotal = 0;
+
+            if (this.cart.length === 0) {
+                cartContainer.innerHTML = '<p class="text-gray-500 text-center py-10">Keranjang kosong. Mulai pindai barcode atau tambahkan barang.</p>';
+                document.getElementById('complete-transaction-btn').disabled = true;
+                this.calculateChange(); // Recalculate totals
+                return;
+            }
+
+            this.cart.forEach(item => {
+                const itemTotal = item.price * item.qty;
+                subtotal += itemTotal;
+
+                const itemHtml = `
+                    <div class="flex items-center p-3 bg-gray-50 rounded-lg shadow-sm hover:bg-gray-100 transition">
+                        <div class="flex-grow">
+                            <h4 class="font-semibold text-gray-800">${item.name}</h4>
+                            <p class="text-sm text-gray-500">${this.formatRupiah(item.price)} x ${item.qty}</p>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <input type="number" min="1" max="${this.products.find(p => p.barcode === item.barcode)?.stock || 100}" value="${item.qty}"
+                                onchange="app.updateCartItemQty('${item.barcode}', this.value)"
+                                class="w-16 p-1 text-center border rounded-md text-sm">
+                            <span class="font-bold text-lg text-indigo-600 w-24 text-right">${this.formatRupiah(itemTotal)}</span>
+                            <button onclick="app.updateCartItemQty('${item.barcode}', 0)" class="text-red-500 hover:text-red-700 p-1 rounded-full">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                cartContainer.insertAdjacentHTML('beforeend', itemHtml);
+            });
+
+            document.getElementById('cart-subtotal').textContent = this.formatRupiah(subtotal);
+            document.getElementById('cart-total').textContent = this.formatRupiah(subtotal);
+            document.getElementById('complete-transaction-btn').disabled = false;
+            this.calculateChange();
+        }
+
+        clearCart() {
+            this.cart = [];
+            document.getElementById('cash-input').value = 0;
+            this.renderCart();
+            this.showMessage("Keranjang Dikosongkan", "Keranjang belanja telah dikosongkan.");
+        }
+
+        calculateChange() {
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            const cash = parseFloat(document.getElementById('cash-input').value) || 0;
+            const change = cash - total;
+
+            document.getElementById('cart-total').textContent = this.formatRupiah(total);
+            document.getElementById('cart-change').textContent = this.formatRupiah(change);
+
+            const changeEl = document.getElementById('cart-change');
+            changeEl.classList.toggle('text-red-600', change < 0);
+            changeEl.classList.toggle('text-green-600', change >= 0);
+        }
+
+        async completeTransaction() {
+            if (this.isTransactionProcessing) return;
+            this.isTransactionProcessing = true;
+            document.getElementById('complete-transaction-btn').textContent = 'Memproses...';
+            document.getElementById('complete-transaction-btn').disabled = true;
+
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            const cash = parseFloat(document.getElementById('cash-input').value) || 0;
+            const change = cash - total;
+
+            if (this.cart.length === 0 || total === 0) {
+                this.showMessage("Transaksi Gagal", "Keranjang belanja masih kosong.");
+                this.isTransactionProcessing = false;
+                document.getElementById('complete-transaction-btn').textContent = 'Selesaikan Transaksi';
+                document.getElementById('complete-transaction-btn').disabled = false;
+                return;
+            }
+
+            if (change < 0) {
+                this.showMessage("Pembayaran Kurang", `Uang tunai yang diterima kurang ${this.formatRupiah(Math.abs(change))}.`);
+                this.isTransactionProcessing = false;
+                document.getElementById('complete-transaction-btn').textContent = 'Selesaikan Transaksi';
+                document.getElementById('complete-transaction-btn').disabled = false;
+                return;
+            }
+
+            try {
+                // 1. Process Stock Update and Transaction Logging in a single Firestore Transaction
+                await window.firebase.runTransaction(this.db, async (transaction) => {
+                    const updates = [];
+                    const productsRef = window.firebase.collection(this.db, 'artifacts', appId, 'public', 'data', 'products');
+
+                    // Check stock and prepare updates
+                    for (const item of this.cart) {
+                        const productDocRef = window.firebase.doc(productsRef, item.id);
+                        const productDoc = await transaction.get(productDocRef);
+
+                        if (!productDoc.exists) {
+                            throw new Error(`Produk dengan ID ${item.id} tidak ditemukan.`);
+                        }
+
+                        const currentStock = productDoc.data().stock;
+                        const newStock = currentStock - item.qty;
+
+                        if (newStock < 0) {
+                            throw new Error(`Stok untuk ${item.name} tidak mencukupi. Tersedia: ${currentStock}`);
+                        }
+
+                        // Apply stock update
+                        transaction.update(productDocRef, { stock: newStock });
+                        updates.push({ id: item.id, stock: newStock });
+                    }
+
+                    // 2. Log the Transaction (Private Data)
+                    const transactionData = {
+                        timestamp: new Date().toISOString(),
+                        userId: this.userId,
+                        items: this.cart.map(item => ({
+                            name: item.name,
+                            qty: item.qty,
+                            price: item.price,
+                            barcode: item.barcode
+                        })),
+                        total: total,
+                        cash: cash,
+                        change: change
+                    };
+
+                    const transactionsCollectionRef = window.firebase.collection(this.db, 'artifacts', appId, 'users', this.userId, 'transactions');
+                    transaction.add(transactionsCollectionRef, transactionData);
+
+                    return transactionData;
+                });
+
+                // Success
+                this.generateReceipt(total, cash, change, this.cart);
+                this.clearCart(); // Clear cart after successful transaction
+
+            } catch (error) {
+                console.error("Transaction Error:", error);
+                this.showMessage("Transaksi Gagal", `Terjadi kesalahan saat memproses transaksi: ${error.message}`);
+            } finally {
+                this.isTransactionProcessing = false;
+                document.getElementById('complete-transaction-btn').textContent = 'Selesaikan Transaksi';
+                document.getElementById('complete-transaction-btn').disabled = false;
+            }
+        }
+
+        generateReceipt(total, cash, change, items) {
+            const receiptContent = document.getElementById('receipt-content');
+            receiptContent.innerHTML = `
+                <div class="flex justify-between text-xs text-gray-500 border-b pb-1 mb-2">
+                    <span>${new Date().toLocaleDateString('id-ID')}</span>
+                    <span>${new Date().toLocaleTimeString('id-ID')}</span>
+                </div>
+                <div class="mb-4">
+                    ${items.map(item => `
+                        <div class="flex justify-between">
+                            <span class="w-1/2">${item.name}</span>
+                            <span class="w-1/4 text-center">${item.qty} x ${this.formatRupiah(item.price)}</span>
+                            <span class="w-1/4 text-right">${this.formatRupiah(item.qty * item.price)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="space-y-1 border-t pt-2 border-gray-300 text-base">
+                    <div class="flex justify-between font-semibold">
+                        <span>TOTAL</span>
+                        <span>${this.formatRupiah(total)}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>TUNAI</span>
+                        <span>${this.formatRupiah(cash)}</span>
+                    </div>
+                    <div class="flex justify-between font-bold text-lg text-green-600">
+                        <span>KEMBALIAN</span>
+                        <span>${this.formatRupiah(change)}</span>
+                    </div>
+                </div>
+            `;
+            this.showModal('receipt-modal');
+        }
+
+        /** Setup and Initialization **/
+        setupListeners() {
+            // General form submission for product input (initial setup before scan)
+            document.getElementById('product-input-form').onsubmit = (e) => {
+                e.preventDefault();
+                const barcode = document.getElementById('input-barcode').value;
+                const name = document.getElementById('input-name').value;
+                const price = document.getElementById('input-price').value;
+                const stock = document.getElementById('input-stock').value;
+                this.saveProduct(barcode, name, price, stock);
+            };
+
+            // Cash input listener
+            document.getElementById('cash-input').addEventListener('change', () => this.calculateChange());
+            document.getElementById('cash-input').addEventListener('keyup', () => this.calculateChange());
+        }
+    }
+
+    // Initialize the application globally
+    window.app = new BarokahPOS();
+</script>
+
+</body>
+</html>
